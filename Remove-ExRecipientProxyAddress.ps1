@@ -38,6 +38,7 @@ $suported_recipient_types = @(
     'MailNonUniversalGroup',
     'MailUniversalDistributionGroup',
     'MailUniversalSecurityGroup',
+    'DynamicDistributionGroup',
     'MailUser',
     'RemoteEquipmentMailbox',
     'RemoteRoomMailbox',
@@ -52,7 +53,7 @@ $suported_recipient_types = @(
 
 $remote_mailbox_types = $suported_recipient_types | Where-Object { $_ -like "Remote*" }
 $mailbox_types = $suported_recipient_types | Where-Object { $_ -like "*Mailbox" -and $_ -notin $remote_mailbox_types }
-$distribution_group_types = $suported_recipient_types | Where-Object { $_ -like "*Group" }
+$distribution_group_types = $suported_recipient_types | Where-Object { $_ -like "*Group" -and $_ -ne 'DynamicDistributionGroup' }
 
 foreach ($id in @($Identity)) {
     # Make sure the recipient exists
@@ -107,25 +108,79 @@ foreach ($id in @($Identity)) {
         Write-Information "[$($recipient_object.DisplayName)]: There are ($($proxy_address_to_remove.Count)) proxy address domain match to remove = $($proxy_address_to_remove -join " ,")"
     }
 
+    $params = @{
+        Identity       = $recipient_object.Identity
+        EmailAddresses = @{remove = $proxy_address_to_remove }
+    }
+    if ($recipient_object.EmailAddressPolicyEnabled) {
+        $params.Add('EmailAddressPolicyEnabled', $false)
+    }
+
+    # If the recipient type is mailbox (not remote)
     if ($recipient_object.RecipientTypeDetails -in $mailbox_types) {
+        try {
+            Set-Mailbox @params -ErrorAction Stop
+            Write-Information "[$($recipient_object.DisplayName)]: Removed proxy addresses OK."
+        }
+        catch {
+            Write-Information $_.Exception.Message
+        }
 
     }
 
+    # If the recipient type is remote mailbox
     if ($recipient_object.RecipientTypeDetails -in $remote_mailbox_types) {
-
+        try {
+            Set-RemoteMailbox @params -ErrorAction Stop
+            Write-Information "[$($recipient_object.DisplayName)]: Removed proxy addresses OK."
+        }
+        catch {
+            Write-Information $_.Exception.Message
+        }
     }
 
+    # If the recipient type is a distribution group (DG, SG, DDL)
     if ($recipient_object.RecipientTypeDetails -in $distribution_group_types) {
-
+        try {
+            Set-DistributionGroup @params -ErrorAction Stop
+            Write-Information "[$($recipient_object.DisplayName)]: Removed proxy addresses OK."
+        }
+        catch {
+            Write-Information $_.Exception.Message
+        }
     }
 
+    # If the recipient type is MailUser
     if ($recipient_object.RecipientTypeDetails -eq 'MailUser') {
-
+        try {
+            Set-MailUser @params -ErrorAction Stop
+            Write-Information "[$($recipient_object.DisplayName)]: Removed proxy addresses OK."
+        }
+        catch {
+            Write-Information $_.Exception.Message
+        }
     }
 
+    # If the recipient type is MailContact
     if ($recipient_object.RecipientTypeDetails -eq 'MailContact') {
-
+        try {
+            Set-MailContact @params -ErrorAction Stop
+            Write-Information "[$($recipient_object.DisplayName)]: Removed proxy addresses OK."
+        }
+        catch {
+            Write-Information $_.Exception.Message
+        }
     }
 
+    # If the recipient type is Dynamic
+    if ($recipient_object.RecipientTypeDetails -eq 'DynamicDistributionGroup') {
+        try {
+            Set-DynamicDistributionGroup @params -ErrorAction Stop
+            Write-Information "[$($recipient_object.DisplayName)]: Removed proxy addresses OK."
+        }
+        catch {
+            Write-Information $_.Exception.Message
+        }
+    }
 }
 
