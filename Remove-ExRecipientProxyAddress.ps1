@@ -1,186 +1,154 @@
 [CmdletBinding(DefaultParameterSetName = 'byDomain')]
 param (
     [Parameter(Mandatory)]
-    [string[]]
-    $Identity,
+    [string[]]$Identity,
 
     [Parameter(ParameterSetName = 'byDomain', Mandatory)]
-    [string[]]
-    $Domain,
+    [string[]]$Domain,
 
     [Parameter(ParameterSetName = 'byProxyAddress', Mandatory)]
-    [string[]]
-    $ProxyAddress
+    [string[]]$ProxyAddress,
+
+    [string]$TargetDomainController,
+    [string]$OutputCsv,
+    [switch]$ReturnResult
 )
 
-# $InformationPreference = 'Continue'
-
-#Region Function
 function Test-IsValidFqdn {
-    param (
-        [string]$Fqdn
-    )
-
-    $FqdnPattern = '^(?=.{1,253}$)(([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\-]*[a-zA-Z0-9])\.)*([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9\-]*[A-Za-z0-9])$'
-
-    if ($Fqdn -match $FqdnPattern) {
-        return $true
-    }
-    else {
-        return $false
-    }
+    param ([string]$Fqdn)
+    return $Fqdn -match '^(?=.{1,253}$)(([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\-]*[a-zA-Z0-9])\.)*([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9\-]*[A-Za-z0-9])$'
 }
-#EndRegion Function
 
-$suported_recipient_types = @(
-    'EquipmentMailbox',
-    'MailContact',
-    'MailNonUniversalGroup',
-    'MailUniversalDistributionGroup',
-    'MailUniversalSecurityGroup',
-    'DynamicDistributionGroup',
-    'MailUser',
-    'RemoteEquipmentMailbox',
-    'RemoteRoomMailbox',
-    'RemoteSharedMailbox',
-    'RemoteTeamMailbox',
-    'RemoteUserMailbox',
-    'RoomMailbox',
-    'SchedulingMailbox',
-    'SharedMailbox',
-    'UserMailbox'
-)
+$now = [datetime]::Now
 
-$remote_mailbox_types = $suported_recipient_types | Where-Object { $_ -like "Remote*" }
-$mailbox_types = $suported_recipient_types | Where-Object { $_ -like "*Mailbox" -and $_ -notin $remote_mailbox_types }
-$distribution_group_types = $suported_recipient_types | Where-Object { $_ -like "*Group" -and $_ -ne 'DynamicDistributionGroup' }
+if (!$OutputCsv) {
+    $OutputCsv = "$($PSScriptRoot)\remove_proxy_result-$($now.ToString('yyyy-MM-ddTHH-mm-ss')).csv"
+}
 
-foreach ($id in @($Identity)) {
-    # Make sure the recipient exists
+$supported_recipient_types = @(Get-Content "$PSScriptRoot\supported_recipient_types.list")
+$remote_mailbox_types = $supported_recipient_types | Where-Object { $_ -like "Remote*" }
+$mailbox_types = $supported_recipient_types | Where-Object { $_ -like "*Mailbox" -and $_ -notin $remote_mailbox_types }
+$distribution_group_types = $supported_recipient_types | Where-Object { $_ -like "*Group" -and $_ -ne 'DynamicDistributionGroup' }
+
+# Results will be collected here
+$results = @()
+
+:outer foreach ($id in $Identity) {
     try {
-        $recipient_object = Get-Recipient -Identity $id -ErrorAction Stop
-        Write-Information "[$($recipient_object.DisplayName)]: Recipient found!"
+        $recipient = Get-Recipient -Identity $id -ErrorAction Stop
+        Write-Information "[$($recipient.DisplayName)]: Recipient found!"
     }
     catch {
-        Write-Information $_.Exception.Message
-    }
-
-    # Check if recipient type is supported
-    if ($recipient_object.RecipientTypeDetails -notin $suported_recipient_types) {
-        Write-Information "[$($recipient_object.PrimarySmtpAddress.Address)]: This recipient type [$($recipient_object.RecipientTypeDetails)] is not supported."
+        Write-Information "[UNKNOWN]: NOT OK - $($_.Exception.Message)"
         continue
     }
 
-    # Check if proxyaddress domain match is present
-    if ($PSCmdlet.ParameterSetName -eq 'byDomain') {
-        $proxy_address_to_remove = [system.collections.arraylist]@()
-        $recipient_object.EmailAddresses | Where-Object {
-            $emailDomain = $_.AddressString.Split('@')[-1]
-            $Domain -contains $emailDomain
-        } | ForEach-Object {
-            $_.ProxyAddressString
-        } | ForEach-Object { $null = $proxy_address_to_remove.Add($_) }
-
-        # Skip if there are zero matches
-        if ($proxy_address_to_remove.Count -eq 0) {
-            Write-Information "[$($recipient_object.DisplayName)]: There are ($($proxy_address_to_remove.Count)) proxy address domain match to remove."
-            continue
-        }
-        Write-Information "[$($recipient_object.DisplayName)]: There are ($($proxy_address_to_remove.Count)) proxy address domain match to remove = $($proxy_address_to_remove -join " ,")"
+    if ($recipient.RecipientTypeDetails -notin $supported_recipient_types) {
+        Write-Information "[$($recipient.PrimarySmtpAddress.Address)]: Unsupported recipient type [$($recipient.RecipientTypeDetails)]"
+        continue
     }
 
-    # Check if proxyaddress email address match is present
-    if ($PSCmdlet.ParameterSetName -eq 'byProxyAddress') {
-        $proxy_address_to_remove = [system.collections.arraylist]@()
-        $recipient_object.EmailAddresses | Where-Object {
-            $emailAddress = $_.AddressString
-            $ProxyAddress -contains $emailAddress
+    $proxyToRemove = @()
+    # $matchCriteria = ""
 
-        } | ForEach-Object {
-            $_.ProxyAddressString
-        } | ForEach-Object { $null = $proxy_address_to_remove.Add($_) }
+    switch ($PSCmdlet.ParameterSetName) {
+        'byDomain' {
+            $proxyToRemove = $recipient.EmailAddresses |
+            Where-Object {
+                $emailDomain = $_.AddressString.Split('@')[-1]
+                $Domain -contains $emailDomain -and $_.AddressString -ne $recipient.PrimarySmtpAddress.Address
+            } |
+            Select-Object -ExpandProperty ProxyAddressString
 
-        # Skip if there are zero matches
-        if ($proxy_address_to_remove.Count -eq 0) {
-            Write-Information "[$($recipient_object.DisplayName)]: There are ($($proxy_address_to_remove.Count)) proxy address domain match to remove."
-            continue
+            if (-not $proxyToRemove) {
+                Write-Information "[$($recipient.DisplayName)]: No proxy addresses matched for domain removal."
+                continue outer
+            }
+
+            Write-Information "[$($recipient.DisplayName)]: Proxy addresses to remove (domain match): $($proxyToRemove -join ', ')"
         }
-        Write-Information "[$($recipient_object.DisplayName)]: There are ($($proxy_address_to_remove.Count)) proxy address domain match to remove = $($proxy_address_to_remove -join " ,")"
+
+        'byProxyAddress' {
+            $proxyToRemove = $recipient.EmailAddresses |
+            Where-Object { $ProxyAddress -contains $_.AddressString } |
+            Select-Object -ExpandProperty ProxyAddressString
+
+            if (-not $proxyToRemove) {
+                Write-Information "[$($recipient.DisplayName)]: No proxy addresses matched for email address removal."
+                continue outer
+            }
+
+            Write-Information "[$($recipient.DisplayName)]: Proxy addresses to remove (exact match): $($proxyToRemove -join ', ')"
+        }
     }
 
     $params = @{
-        Identity       = $recipient_object.Identity
-        EmailAddresses = @{remove = $proxy_address_to_remove }
-    }
-    if ($recipient_object.EmailAddressPolicyEnabled) {
-        $params.Add('EmailAddressPolicyEnabled', $false)
+        Identity       = $recipient.Identity
+        EmailAddresses = @{ remove = $proxyToRemove }
     }
 
-    # If the recipient type is mailbox (not remote)
-    if ($recipient_object.RecipientTypeDetails -in $mailbox_types) {
+    if ($recipient.EmailAddressPolicyEnabled) {
+        $params.EmailAddressPolicyEnabled = $false
+    }
+
+    if ($TargetDomainController) {
+        $params.DomainController = $TargetDomainController
+    }
+
+    $setCommand = switch ($recipient.RecipientTypeDetails) {
+        { $_ -in $mailbox_types } { 'Set-Mailbox' }
+        { $_ -in $remote_mailbox_types } { 'Set-RemoteMailbox' }
+        { $_ -in $distribution_group_types } { 'Set-DistributionGroup' }
+        'MailUser' { 'Set-MailUser' }
+        'MailContact' { 'Set-MailContact' }
+        'DynamicDistributionGroup' { 'Set-DynamicDistributionGroup' }
+        default { $null }
+    }
+
+    if ($setCommand) {
         try {
-            Set-Mailbox @params -ErrorAction Stop
-            Write-Information "[$($recipient_object.DisplayName)]: Removed proxy addresses OK."
+            & $setCommand @params -ErrorAction Stop
+            Write-Information "[$($recipient.DisplayName)]: Removed proxy addresses OK."
+
+            # Re-fetch updated recipient to get remaining proxy addresses
+            $updatedRecipient = Get-Recipient -Identity $recipient.Identity -ErrorAction Stop
+
+            $remainingProxies = $updatedRecipient.EmailAddresses |
+            Where-Object { $_.AddressString -ne $updatedRecipient.PrimarySmtpAddress.Address } |
+            Select-Object -ExpandProperty ProxyAddressString
+
+            # Add success entry to results
+            $results += [PSCustomObject]@{
+                DisplayName           = $updatedRecipient.DisplayName
+                PrimarySMTPAddress    = $updatedRecipient.PrimarySmtpAddress.Address
+                RemovedProxyAddress   = ($proxyToRemove -join ', ')
+                RemainingProxyAddress = ($remainingProxies -join ', ')
+            }
         }
         catch {
-            Write-Information $_.Exception.Message
-        }
-
-    }
-
-    # If the recipient type is remote mailbox
-    if ($recipient_object.RecipientTypeDetails -in $remote_mailbox_types) {
-        try {
-            Set-RemoteMailbox @params -ErrorAction Stop
-            Write-Information "[$($recipient_object.DisplayName)]: Removed proxy addresses OK."
-        }
-        catch {
-            Write-Information $_.Exception.Message
+            Write-Information "[$($recipient.DisplayName)]: NOT OK - $($_.Exception.Message)"
         }
     }
 
-    # If the recipient type is a distribution group (DG, SG, DDL)
-    if ($recipient_object.RecipientTypeDetails -in $distribution_group_types) {
-        try {
-            Set-DistributionGroup @params -ErrorAction Stop
-            Write-Information "[$($recipient_object.DisplayName)]: Removed proxy addresses OK."
-        }
-        catch {
-            Write-Information $_.Exception.Message
-        }
-    }
-
-    # If the recipient type is MailUser
-    if ($recipient_object.RecipientTypeDetails -eq 'MailUser') {
-        try {
-            Set-MailUser @params -ErrorAction Stop
-            Write-Information "[$($recipient_object.DisplayName)]: Removed proxy addresses OK."
-        }
-        catch {
-            Write-Information $_.Exception.Message
-        }
-    }
-
-    # If the recipient type is MailContact
-    if ($recipient_object.RecipientTypeDetails -eq 'MailContact') {
-        try {
-            Set-MailContact @params -ErrorAction Stop
-            Write-Information "[$($recipient_object.DisplayName)]: Removed proxy addresses OK."
-        }
-        catch {
-            Write-Information $_.Exception.Message
-        }
-    }
-
-    # If the recipient type is Dynamic
-    if ($recipient_object.RecipientTypeDetails -eq 'DynamicDistributionGroup') {
-        try {
-            Set-DynamicDistributionGroup @params -ErrorAction Stop
-            Write-Information "[$($recipient_object.DisplayName)]: Removed proxy addresses OK."
-        }
-        catch {
-            Write-Information $_.Exception.Message
-        }
+    else {
+        Write-Information "[$($recipient.DisplayName)]: No matching Set-* command for recipient type [$($recipient.RecipientTypeDetails)]"
     }
 }
+
+# Export results to CSV if path provided
+# if ($OutputCsv) {
+if ($results) {
+    try {
+        $results | Export-Csv -Path $OutputCsv -NoTypeInformation -Encoding UTF8
+        Write-Information "Output written to: $OutputCsv"
+    }
+    catch {
+        Write-Information "ERROR writing to CSV: $($_.Exception.Message)"
+    }
+    if ($ReturnResult) {
+        $results
+    }
+}
+
+
 

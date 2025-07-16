@@ -1,0 +1,16 @@
+EquipmentMailbox
+MailContact
+MailNonUniversalGroup
+MailUniversalDistributionGroup
+MailUniversalSecurityGroup
+DynamicDistributionGroup
+MailUser
+RemoteEquipmentMailbox
+RemoteRoomMailbox
+RemoteSharedMailbox
+RemoteTeamMailbox
+RemoteUserMailbox
+RoomMailbox
+SchedulingMailbox
+SharedMailbox
+UserMailbox
