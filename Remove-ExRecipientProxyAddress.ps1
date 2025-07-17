@@ -1,22 +1,61 @@
 [CmdletBinding(DefaultParameterSetName = 'byDomain')]
 param (
     [Parameter(Mandatory)]
-    [string[]]$Identity,
+    $Identity,
 
     [Parameter(ParameterSetName = 'byDomain', Mandatory)]
-    [string[]]$Domain,
+    [string[]]$DomainName,
 
     [Parameter(ParameterSetName = 'byProxyAddress', Mandatory)]
     [string[]]$ProxyAddress,
 
     [string]$TargetDomainController,
     [string]$OutputCsv,
-    [switch]$ReturnResult
+    [switch]$ReturnResult,
+    [switch]$Quiet
 )
 
 function Test-IsValidFqdn {
     param ([string]$Fqdn)
     return $Fqdn -match '^(?=.{1,253}$)(([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\-]*[a-zA-Z0-9])\.)*([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9\-]*[A-Za-z0-9])$'
+}
+
+function SayInfo {
+    param (
+        [string]$Text
+    )
+
+    Write-Information "[$(Get-Date -Format G)]: $($Text)"
+}
+
+if (!$Quiet) {
+    $InformationPreference = 'Continue'
+}
+else {
+    $InformationPreference = 'SilentlyContinue'
+}
+
+if ($PSCmdlet.ParameterSetName -eq 'byDomain') {
+    $acceptedDomain = (Get-AcceptedDomain).DomainName
+    $tempDomainCollection = [string[]]@()
+
+    foreach ($domain in $DomainName) {
+        if ($domain -notin $acceptedDomain) {
+            SayInfo "The domain [$($domain)] is not an accepted domain in this organization and will be ignored."
+        }
+        else {
+            $tempDomainCollection += $domain
+        }
+    }
+
+    if (!$tempDomainCollection) {
+        SayInfo "No valid domain to be removed. Script terminated."
+        return $null
+    }
+    else {
+        $DomainName = $tempDomainCollection
+        SayInfo "Proxy address domain to match = $($DomainName -join ", ")"
+    }
 }
 
 $now = [datetime]::Now
@@ -34,38 +73,38 @@ $distribution_group_types = $supported_recipient_types | Where-Object { $_ -like
 $results = @()
 
 :outer foreach ($id in $Identity) {
+    SayInfo $recipient.DisplayName
     try {
         $recipient = Get-Recipient -Identity $id -ErrorAction Stop
-        Write-Information "[$($recipient.DisplayName)]: Recipient found!"
+        SayInfo "  -> Recipient found!"
     }
     catch {
-        Write-Information "[UNKNOWN]: NOT OK - $($_.Exception.Message)"
+        SayInfo "  -> NOT OK - $($_.Exception.Message)"
         continue
     }
 
     if ($recipient.RecipientTypeDetails -notin $supported_recipient_types) {
-        Write-Information "[$($recipient.PrimarySmtpAddress.Address)]: Unsupported recipient type [$($recipient.RecipientTypeDetails)]"
+        SayInfo "  -> Unsupported recipient type [$($recipient.RecipientTypeDetails)]"
         continue
     }
 
     $proxyToRemove = @()
-    # $matchCriteria = ""
 
     switch ($PSCmdlet.ParameterSetName) {
         'byDomain' {
             $proxyToRemove = $recipient.EmailAddresses |
             Where-Object {
                 $emailDomain = $_.AddressString.Split('@')[-1]
-                $Domain -contains $emailDomain -and $_.AddressString -ne $recipient.PrimarySmtpAddress.Address
+                $DomainName -contains $emailDomain -and $_.AddressString -ne $recipient.PrimarySmtpAddress.Address
             } |
             Select-Object -ExpandProperty ProxyAddressString
 
             if (-not $proxyToRemove) {
-                Write-Information "[$($recipient.DisplayName)]: No proxy addresses matched for domain removal."
+                SayInfo "  -> No proxy addresses matched for domain removal."
                 continue outer
             }
 
-            Write-Information "[$($recipient.DisplayName)]: Proxy addresses to remove (domain match): $($proxyToRemove -join ', ')"
+            SayInfo "  -> Proxy addresses to remove (domain match): $($proxyToRemove -join ', ')"
         }
 
         'byProxyAddress' {
@@ -74,11 +113,11 @@ $results = @()
             Select-Object -ExpandProperty ProxyAddressString
 
             if (-not $proxyToRemove) {
-                Write-Information "[$($recipient.DisplayName)]: No proxy addresses matched for email address removal."
+                SayInfo "  -> No proxy addresses matched for email address removal."
                 continue outer
             }
 
-            Write-Information "[$($recipient.DisplayName)]: Proxy addresses to remove (exact match): $($proxyToRemove -join ', ')"
+            SayInfo "  -> Proxy addresses to remove (exact match): $($proxyToRemove -join ', ')"
         }
     }
 
@@ -108,7 +147,7 @@ $results = @()
     if ($setCommand) {
         try {
             & $setCommand @params -ErrorAction Stop
-            Write-Information "[$($recipient.DisplayName)]: Removed proxy addresses OK."
+            SayInfo "  -> Removed proxy addresses OK."
 
             # Re-fetch updated recipient to get remaining proxy addresses
             $updatedRecipient = Get-Recipient -Identity $recipient.Identity -ErrorAction Stop
@@ -126,12 +165,12 @@ $results = @()
             }
         }
         catch {
-            Write-Information "[$($recipient.DisplayName)]: NOT OK - $($_.Exception.Message)"
+            SayInfo " -> NOT OK - $($_.Exception.Message)"
         }
     }
 
     else {
-        Write-Information "[$($recipient.DisplayName)]: No matching Set-* command for recipient type [$($recipient.RecipientTypeDetails)]"
+        SayInfo " -> No matching Set-* command for recipient type [$($recipient.RecipientTypeDetails)]"
     }
 }
 
@@ -140,14 +179,17 @@ $results = @()
 if ($results) {
     try {
         $results | Export-Csv -Path $OutputCsv -NoTypeInformation -Encoding UTF8
-        Write-Information "Output written to: $OutputCsv"
+        SayInfo "Output written to: $OutputCsv"
     }
     catch {
-        Write-Information "ERROR writing to CSV: $($_.Exception.Message)"
+        SayInfo "ERROR writing to CSV: $($_.Exception.Message)"
     }
     if ($ReturnResult) {
         $results
     }
+}
+else {
+    SayInfo "No results."
 }
 
 
