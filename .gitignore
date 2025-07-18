@@ -3,4 +3,4 @@
 *.csv
 *.html
 *.txt
-Set-Ex*
+Set-ExRecipientEmailAddressPolicyEnabledValue.ps1
