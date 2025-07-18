@@ -113,7 +113,7 @@ $results = @()
     }
 
     $params = @{
-        Identity       = $recipient.Identity
+        Identity       = $recipient.GUID.ToString()
         EmailAddresses = @{ remove = $proxyToRemove }
     }
 
@@ -141,7 +141,7 @@ $results = @()
             SayInfo "  -> Removed proxy addresses OK."
 
             # Re-fetch updated recipient to get remaining proxy addresses
-            $updatedRecipient = Get-Recipient -Identity $recipient.Identity -ErrorAction Stop
+            $updatedRecipient = Get-Recipient -Identity $recipient.GUID.ToString() -ErrorAction Stop
 
             $remainingProxies = $updatedRecipient.EmailAddresses |
             Where-Object { $_.AddressString -ne $updatedRecipient.PrimarySmtpAddress.Address } |
