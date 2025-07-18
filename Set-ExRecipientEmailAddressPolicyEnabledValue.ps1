@@ -13,8 +13,12 @@ param (
 
     [Parameter(ParameterSetName = 'All', Mandatory)]
     [switch]
-    $All
+    $All,
+
+    [switch]$Quiet
 )
+
+. "$PSScriptRoot\generic_functions.ps1"
 
 $reverseValue = -not $Value
 
@@ -27,8 +31,6 @@ $distribution_group_types = $supported_recipient_types | Where-Object { $_ -like
 if ($PSCmdlet.ParameterSetName -eq 'All') {
     $Identity = @(Get-Recipient -ResultSize Unlimited -Filter "EmailAddressPolicyEnabled -eq '$($reverseValue.ToString())'")
 }
-
-# $Identity[0].psobject.TypeNames -split ";" | Out-Default
 
 foreach ($id in @($Identity)) {
     # Make sure the recipient exists
