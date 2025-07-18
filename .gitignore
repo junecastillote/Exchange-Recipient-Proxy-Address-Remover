@@ -1,0 +1,6 @@
+/ignore/
+*demo*
+*.csv
+*.html
+*.txt
+Set-ExRecipientEmailAddressPolicyEnabledValue.ps1
